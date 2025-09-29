@@ -39,3 +39,4 @@ out/
 ##
 oidc-policy.json
 inline-policy.json
+ecr-policy.json
