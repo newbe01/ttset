@@ -1,0 +1,90 @@
+name: CI/CD - Build & Deploy to ECS (OIDC)
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-northeast-2
+  ECR_REPOSITORY: test-app
+  ECS_CLUSTER: pp-cluster
+  ECS_SERVICE: pp-definition-service-hl7bwpel
+  TASK_FAMILY: c82ae34e52574ce4b37e64c15f54e102
+  CONTAINER_NAME: app
+  CONTAINER_PORT: 8080
+
+jobs:
+  build-push-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Ensure ECR repo exists
+        run: |
+          aws ecr describe-repositories --repository-names "${{ env.ECR_REPOSITORY }}" || \
+          aws ecr create-repository --repository-name "${{ env.ECR_REPOSITORY }}" --region "${{ env.AWS_REGION }}"
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Build and push Docker image
+        id: build_push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+
+      - name: Set IMAGE_URI env
+        run: echo "IMAGE_URI=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ github.sha }}" >> $GITHUB_ENV
+
+      - name: Render task definition (replace placeholders)
+        run: |
+          sed "s|__IMAGE_URI__|${IMAGE_URI}|g" ecs/taskdef.template.json \
+            | sed "s|__TASK_FAMILY__|${{ env.TASK_FAMILY }}|g" \
+            | sed "s|__CONTAINER_NAME__|${{ env.CONTAINER_NAME }}|g" \
+            | sed "s|__CONTAINER_PORT__|${{ env.CONTAINER_PORT }}|g" \
+            | sed "s|__AWS_REGION__|${{ env.AWS_REGION }}|g" \
+            | sed "s|__ECS_TASK_EXECUTION_ROLE_ARN__|${{ secrets.ECS_TASK_EXECUTION_ROLE_ARN }}|g" \
+            | sed "s|__ECS_TASK_ROLE_ARN__|${{ secrets.ECS_TASK_ROLE_ARN }}|g" \
+            > ecs/taskdef.json
+          echo "Rendered ecs/taskdef.json:"
+          cat ecs/taskdef.json
+
+      - name: Register new task definition
+        id: register
+        run: |
+          aws ecs register-task-definition --cli-input-json file://ecs/taskdef.json > taskdef-register.json
+          jq -r '.taskDefinition.taskDefinitionArn' taskdef-register.json > taskdef_arn.txt
+          echo "TASKDEF_ARN=$(cat taskdef_arn.txt)" >> $GITHUB_ENV
+
+      - name: Update ECS service (force new deployment)
+        run: |
+          aws ecs update-service --cluster "${{ env.ECS_CLUSTER }}" --service "${{ env.ECS_SERVICE }}" --task-definition "${TASKDEF_ARN}" --force-new-deployment
+
+      - name: Wait for service to become stable
+        run: |
+          aws ecs wait services-stable --cluster "${{ env.ECS_CLUSTER }}" --services "${{ env.ECS_SERVICE }}"
+
+      - name: Deployed info
+        run: |
+          echo "Deployed image: ${IMAGE_URI}"
+          aws ecs describe-services --cluster "${{ env.ECS_CLUSTER }}" --services "${{ env.ECS_SERVICE }}"
