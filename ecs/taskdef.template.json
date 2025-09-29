@@ -1,5 +1,5 @@
 {
-  "family": "testpj",
+  "family": "__TASK_FAMILY__",
   "networkMode": "awsvpc",
   "requiresCompatibilities": ["FARGATE"],
   "cpu": "256",
@@ -8,15 +8,17 @@
   "taskRoleArn": "__ECS_TASK_ROLE_ARN__",
   "containerDefinitions": [
     {
-      "name": "app",
+      "name": "__CONTAINER_NAME__",
       "image": "__IMAGE_URI__",
       "essential": true,
-      "portMappings": [{ "containerPort": 8080, "protocol": "tcp" }],
+      "portMappings": [
+        { "containerPort": __CONTAINER_PORT__, "protocol": "tcp" }
+      ],
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
-          "awslogs-group": "/ecs/my-spring-task",
-          "awslogs-region": "ap-northeast-2",
+          "awslogs-group": "__LOG_GROUP__",
+          "awslogs-region": "__AWS_REGION__",
           "awslogs-stream-prefix": "ecs"
         }
       }
