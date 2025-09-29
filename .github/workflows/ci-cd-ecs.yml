@@ -16,6 +16,7 @@ env:
   TASK_FAMILY: c82ae34e52574ce4b37e64c15f54e102
   CONTAINER_NAME: app
   CONTAINER_PORT: 8080
+  LOG_GROUP_NAME: /ecs/my-spring-task   # <- 여기에 로그 그룹 이름 지정
 
 jobs:
   build-push-deploy:
@@ -35,6 +36,16 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
+
+      # 🔹 CloudWatch 로그 그룹 생성
+      - name: Ensure CloudWatch log group exists
+        run: |
+          if ! aws logs describe-log-groups --log-group-name-prefix "${{ env.LOG_GROUP_NAME }}" | grep "${{ env.LOG_GROUP_NAME }}"; then
+            echo "Log group does not exist. Creating..."
+            aws logs create-log-group --log-group-name "${{ env.LOG_GROUP_NAME }}"
+          else
+            echo "Log group already exists."
+          fi
 
       - name: Ensure ECR repo exists
         run: |
@@ -65,6 +76,7 @@ jobs:
             | sed "s|__AWS_REGION__|${{ env.AWS_REGION }}|g" \
             | sed "s|__ECS_TASK_EXECUTION_ROLE_ARN__|${{ secrets.ECS_TASK_EXECUTION_ROLE_ARN }}|g" \
             | sed "s|__ECS_TASK_ROLE_ARN__|${{ secrets.ECS_TASK_ROLE_ARN }}|g" \
+            | sed "s|__LOG_GROUP__|${{ env.LOG_GROUP_NAME }}|g" \
             > ecs/taskdef.json
           echo "Rendered ecs/taskdef.json:"
           cat ecs/taskdef.json
